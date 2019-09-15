@@ -1,0 +1,223 @@
+/*
+ * uMQTTBroker demo for Arduino (C++-style)
+ *
+ * The program defines a custom broker class with callbacks,
+ * starts it, subscribes locally to anything, and publishs a topic every second.
+ * Try to connect from a remote client and publish something - the console will show this as well.
+ */
+#include <LiquidCrystal_I2C.h>
+#include <ESP8266WiFi.h>
+#include "uMQTTBroker.h"
+#define led D7
+/*
+ * Your WiFi config here
+ */
+
+bool failure=0;
+int lcdColumns = 16;
+int lcdRows = 4;
+int acc_value;
+int mic_value;
+const int zpin = A0;
+const int mpin = D0;
+String DataStr="";
+String AccStr="";
+String MicStr="";
+String lcd1="<<<VIIT_HACKATHON>>>",lcd2="--------------------",lcd3="--------------------",lcd4="--------------------";
+int pub=0;
+
+LiquidCrystal_I2C lcd(0x27, lcdColumns, lcdRows);  
+
+
+char ssid[] = "viit-hackathon";     // your network SSID (name)
+char pass[] = "017LA7pq"; // your network password
+bool WiFiAP = false;      // Do yo want the ESP as AP?
+
+void refresh_display(){
+    lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print(lcd1);
+  lcd.setCursor(0, 1);
+  lcd.print(lcd2);
+   lcd.setCursor(0, 2);
+  lcd.print(lcd3);
+   lcd.setCursor(0, 3);
+  lcd.print(lcd4);
+  }
+
+/*
+ * Custom broker class with overwritten callback functions
+ */
+class myMQTTBroker: public uMQTTBroker
+{
+public:
+    virtual bool onConnect(IPAddress addr, uint16_t client_count) {
+      Serial.println(addr.toString()+" connected");
+      return true;
+    }
+   
+    virtual bool onAuth(String username, String password) {
+      Serial.println("Username/Password: "+username+"/"+password);
+      return true;
+    }
+   
+    virtual void onData(String topic, const char *data, uint32_t length) {
+      char data_str[length+1];
+      os_memcpy(data_str, data, length);
+      data_str[length] = '\0';
+     
+      Serial.println("received topic '"+topic+"' with data '"+(String)data_str+"'");
+      if(topic == "Data/output" and failure !=1)
+      {
+        if((String)data_str == "0")
+        {
+          lcd3 = "Engine Cond : GOOD";
+          lcd4 = " Engine State : ON";
+          failure = 0;
+          }
+          else if((String)data_str == "1" and lcd3 == "Engine Cond : GOOD"){
+          lcd3 = "Warning:Failure Pred";
+          lcd4 = " Engine State : ON";
+          failure = 0;          
+          }
+          else if((String)data_str == "1"){
+          lcd3 = "Warning:Failure Pred";
+          lcd4 = " Engine State : OFF";
+          failure = 1;          
+          pub =1;
+           
+          }
+                      refresh_display();
+        }
+        else if(topic == "Data/output")
+        {
+           if((String)data_str == "2")
+        {
+          lcd3 = "Engine Cond : GOOD";
+          lcd4 = " Engine State : ON";
+          failure = 0;
+          }
+          }
+    }
+};
+
+myMQTTBroker myBroker;
+
+
+/*
+ * WiFi init stuff
+ */
+void startWiFiClient()
+{
+  Serial.println("Connecting to "+(String)ssid);
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid, pass);
+ 
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("");
+ 
+  Serial.println("WiFi connected");
+  Serial.println("IP address: " + WiFi.localIP().toString());
+}
+
+void startWiFiAP()
+{
+  WiFi.mode(WIFI_AP);
+  WiFi.softAP(ssid, pass);
+  Serial.println("AP started");
+  Serial.println("IP address: " + WiFi.softAPIP().toString());
+}
+
+void setup()
+{
+
+
+    // initialize LCD
+  lcd.begin();
+  // turn on LCD backlight                      
+  lcd.backlight();
+  pinMode(D3,OUTPUT);
+  pinMode(led,OUTPUT);
+ 
+  Serial.begin(115200);
+  Serial.println();
+  Serial.println();
+
+  // Start WiFi
+  if (WiFiAP)
+    startWiFiAP();
+  else
+    startWiFiClient();
+
+  // Start the broker
+  Serial.println("Starting MQTT broker");
+  myBroker.init();
+
+/*
+ * Subscribe to anything
+ */
+  myBroker.subscribe("#");
+
+  refresh_display();
+
+  digitalWrite(D3,HIGH);
+
+
+}
+
+int counter = 0;
+
+void loop()
+{
+  if(pub ==1)
+  {pub=0;
+    myBroker.publish("Msg","sleep");
+  }
+  if(failure){
+    lcd2 = " Service Needed..";
+    lcd3 = " Failure Predicted";
+    lcd4 = " Engine State : OFF";
+    digitalWrite(D3,LOW);
+    refresh_display();
+    delay(1000);
+    }
+    else{
+
+digitalWrite(D3,HIGH);
+     
+  DataStr="";
+  AccStr="";
+  MicStr="";
+ 
+  lcd2 = "  Scanning_Engine";
+  refresh_display();
+
+    digitalWrite(led,HIGH);
+   
+  for(int i=0;i<40;i++)
+  {
+    acc_value = analogRead(zpin)-500;
+    mic_value = digitalRead(mpin);
+    AccStr = AccStr+" "+String(acc_value);
+    MicStr = MicStr+" "+String(mic_value);
+    delay(59);
+   }
+    digitalWrite(led,LOW);
+    digitalWrite(D3,LOW);
+   
+
+  lcd2 = "  Uploading Data";
+  refresh_display();  
+
+   delay(1500);
+  DataStr = AccStr+MicStr;
+  myBroker.publish("Data/modules",DataStr);
+  Serial.print("publishing");
+  Serial.println(DataStr);
+
+    }
+
+}
